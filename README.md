@@ -253,7 +253,7 @@ outra, sem editar o projeto: `make release VERSION=0.7.0 BUILD_NUMBER=42`.
 
 ### Publicar uma versão
 
-O workflow [Release](.github/workflows/release.yml) roda lint e testes, gera o zip e cria a
+O workflow [Release](.github/workflows/release.yml) roda o lint, gera o zip e cria a
 GitHub Release com o zip e o SHA-256 anexados e as notas geradas a partir dos PRs e commits.
 Dois jeitos de disparar:
 
