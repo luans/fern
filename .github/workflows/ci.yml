@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    # O projeto usa o formato do Xcode 16+ (pastas sincronizadas) e o SDK do macOS 26.
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lint
+        run: make lint
+
+      - name: Build
+        run: make build
+
+      - name: Unit tests
+        run: make test
+
+  # Em cada push na main, gera o zip de Release e guarda como artefato do workflow
+  # (aba Actions › execução › Artifacts), para testar a versão antes de publicar.
+  package:
+    if: github.event_name == 'push'
+    needs: build-and-test
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build release
+        run: make release VERSION="$(make -s version)-dev.${{ github.run_number }}" BUILD_NUMBER=${{ github.run_number }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Fern-main-${{ github.run_number }}
+          path: |
+            build/Fern-*.zip
+            build/Fern-*.zip.sha256
+          retention-days: 14
+          if-no-files-found: error

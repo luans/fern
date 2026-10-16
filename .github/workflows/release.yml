@@ -1,0 +1,107 @@
+name: Release
+
+# Gera uma versão nova do Fern e publica o zip como artefato de uma GitHub Release.
+#
+# Dois jeitos de disparar:
+# - Enviar uma tag:   git tag v0.7.0 && git push origin v0.7.0
+# - Pela aba Actions: "Release" › "Run workflow", informando a versão (ex.: 0.7.0).
+#   O workflow cria a tag no commit escolhido.
+#
+# Versões com sufixo (ex.: 0.7.0-beta.1) saem como pré-lançamento.
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Versão sem o v (ex.: 0.7.0 ou 0.7.0-beta.1)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            version="${INPUT_VERSION#v}"
+          else
+            version="${GITHUB_REF_NAME#v}"
+          fi
+          if ! echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+            echo "::error::Versão inválida: '$version'. Use X.Y.Z ou X.Y.Z-sufixo."
+            exit 1
+          fi
+          tag="v$version"
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null; then
+            echo "::error::A tag $tag já existe."
+            exit 1
+          fi
+          prerelease=false
+          case "$version" in *-*) prerelease=true ;; esac
+          {
+            echo "version=$version"
+            echo "tag=$tag"
+            echo "prerelease=$prerelease"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Lint
+        run: make lint
+
+      - name: Unit tests
+        run: make test
+
+      - name: Build release
+        run: make release VERSION=${{ steps.version.outputs.version }} BUILD_NUMBER=${{ github.run_number }}
+
+      - name: Verify app
+        run: |
+          app=build/Build/Products/Release/Fern.app
+          lipo -archs "$app/Contents/MacOS/Fern"
+          lipo "$app/Contents/MacOS/Fern" -verify_arch arm64 x86_64
+          codesign --verify --deep --strict "$app"
+          /usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "$app/Contents/Info.plist"
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+          PRERELEASE: ${{ steps.version.outputs.prerelease }}
+        run: |
+          cat > "$RUNNER_TEMP/notes.md" <<'EOF'
+          Baixe `Fern-*.zip`, descompacte e mova o `Fern.app` para Aplicativos.
+
+          O app tem assinatura local (sem Developer ID). Na primeira vez, libere em **Ajustes do Sistema › Privacidade e Segurança › Abrir Mesmo Assim**, ou rode:
+
+          ```
+          xattr -dr com.apple.quarantine /Applications/Fern.app
+          ```
+
+          Para conferir o download: `shasum -a 256 -c Fern-*.zip.sha256`
+          EOF
+
+          flags=()
+          if [ "$PRERELEASE" = "true" ]; then flags+=(--prerelease); fi
+          gh release create "$TAG" \
+            "build/Fern-$VERSION.zip" \
+            "build/Fern-$VERSION.zip.sha256" \
+            --target "$GITHUB_SHA" \
+            --title "Fern $VERSION" \
+            --notes-file "$RUNNER_TEMP/notes.md" \
+            --generate-notes \
+            "${flags[@]}"
